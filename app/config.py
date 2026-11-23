@@ -25,10 +25,20 @@ class Settings:
     postgres_user: str = "bot"
     log_level: str = "INFO"
     health_port: int = 8080
+    llm_api_key: str = field(default="", repr=False)
+    llm_base_url: str = ""
+    llm_model: str = ""
+    llm_timeout_seconds: float = 30.0
+    history_max_messages: int = 12
+    history_max_chars: int = 8000
 
     @classmethod
     def load(
-        cls, env_file: Path | str = ".env", *, environ: Mapping[str, str] | None = None
+        cls,
+        env_file: Path | str = ".env",
+        *,
+        environ: Mapping[str, str] | None = None,
+        require_llm: bool = False,
     ) -> "Settings":
         values = {
             **dotenv_values(env_file, interpolate=False),
@@ -36,7 +46,7 @@ class Settings:
         }
 
         def value(key: str, default: str = "") -> str:
-            return values.get(key) or default
+            return (values.get(key) or default).strip()
 
         def port(key: str, default: str) -> int:
             try:
@@ -46,6 +56,24 @@ class Settings:
                 return result
             except ValueError:
                 raise ConfigError(f"{key}: нужен номер порта от 1 до 65535.") from None
+
+        def positive_int(key: str, default: str) -> int:
+            try:
+                result = int(value(key, default))
+                if result <= 0:
+                    raise ValueError
+                return result
+            except ValueError:
+                raise ConfigError(f"{key}: нужно целое число больше 0.") from None
+
+        def positive_float(key: str, default: str) -> float:
+            try:
+                result = float(value(key, default))
+                if result <= 0:
+                    raise ValueError
+                return result
+            except ValueError:
+                raise ConfigError(f"{key}: нужно число больше 0.") from None
 
         token = value("BOT_TOKEN")
         try:
@@ -76,6 +104,24 @@ class Settings:
         level = value("LOG_LEVEL", "INFO").upper()
         if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ConfigError("LOG_LEVEL: используйте DEBUG, INFO, WARNING, ERROR или CRITICAL.")
+
+        llm_api_key = value("LLM_API_KEY")
+        llm_base_url = value("LLM_BASE_URL").rstrip("/")
+        llm_model = value("LLM_MODEL")
+
+        if llm_base_url:
+            parsed_llm = urlsplit(llm_base_url)
+            if parsed_llm.scheme not in {"http", "https"} or not parsed_llm.netloc:
+                raise ConfigError("LLM_BASE_URL: укажите корректный http(s):// адрес API.")
+
+        if require_llm:
+            if not llm_api_key:
+                raise ConfigError("LLM_API_KEY: укажите ключ доступа к языковой модели.")
+            if not llm_base_url:
+                raise ConfigError("LLM_BASE_URL: укажите базовый адрес OpenAI-совместимого API.")
+            if not llm_model:
+                raise ConfigError("LLM_MODEL: укажите имя модели.")
+
         return cls(
             bot_token=token,
             postgres_password=password,
@@ -86,4 +132,10 @@ class Settings:
             postgres_user=value("POSTGRES_USER", "bot"),
             log_level=level,
             health_port=port("HEALTH_PORT", "8080"),
+            llm_api_key=llm_api_key,
+            llm_base_url=llm_base_url,
+            llm_model=llm_model,
+            llm_timeout_seconds=positive_float("LLM_TIMEOUT_SECONDS", "30"),
+            history_max_messages=positive_int("HISTORY_MAX_MESSAGES", "12"),
+            history_max_chars=positive_int("HISTORY_MAX_CHARS", "8000"),
         )
